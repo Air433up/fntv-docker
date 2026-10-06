@@ -1,0 +1,59 @@
+# =============================================================================
+# trimmedia-linux-arm Docker Compose 部署文件
+# 适用: arm64 设备（斐讯 N1 / Amlogic S905 / 其他 arm64 盒子、SBC）
+#
+# 使用:
+#   1. 修改下面 volumes 里的媒体目录路径
+#   2. docker compose up -d --build      # 首次构建并启动
+#   3. 访问 http://<设备IP>:8005 （影视） 和 http://<设备IP>:8007 （音乐）
+#
+# 构建时如需 GitHub 加速（国内网络）:
+#   PROXY_PREFIX=https://ghproxy.net/ docker compose build
+# =============================================================================
+
+services:
+  trimmedia:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 构建时下载 GitHub release 资源用的加速前缀，留空表示直连
+        PROXY_PREFIX: ${PROXY_PREFIX:-}
+    image: trimmedia-linux-arm:local
+    container_name: trimmedia
+    restart: unless-stopped
+
+    ports:
+      - "8005:8005"   # 飞牛影视 Web
+      - "8007:8007"   # 飞牛音乐 Web
+
+    environment:
+      TZ: Asia/Shanghai
+      # 媒体库根目录（容器内路径，保持 /vol1/1000 与下面挂载点一致即可）
+      MEDIA_DIR: /vol1/1000
+      # Web 端口（如修改了这里，记得同步修改上面的 ports 映射）
+      FNTV_WEB_PORT: "8005"
+      FNMUSIC_WEB_PORT: "8007"
+      # 服务开关：按需禁用，N1 内存紧张时建议只开影视
+      ENABLE_MEDIASRV: "1"   # 转码/媒体分析服务（影视需要）
+      ENABLE_FNTV: "1"       # 飞牛影视
+      ENABLE_FNMUSIC: "1"    # 飞牛音乐
+      LOG_LEVEL: info
+
+    volumes:
+      # ① 媒体库目录 —— ★ 改成你自己的路径（N1 上通常是外接硬盘/U盘挂载点）
+      #    容器内勿改（/vol1/1000 是程序内多处硬编码所依赖的路径）
+      - /mnt/media:/vol1/1000
+
+      # ② 影视数据（数据库、元数据），首次启动自动初始化
+      - ./data/fntv:/opt/trim/fntv/data
+
+      # ③ 音乐数据（数据库、歌词分片库、封面缓存）
+      - ./data/music:/var/apps/trim.music
+
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/trim_app_cgi/rpcbroker"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
