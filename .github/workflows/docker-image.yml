@@ -1,0 +1,84 @@
+# =============================================================================
+# GitHub Actions：云端构建 arm64 Docker 镜像（免去在 N1 等小设备上编译）
+#
+# 产物：
+#   ① Release 附件 trimmedia-arm64.tar.gz  —— 在 N1 上下载后 docker load 使用
+#   ② （可选）GHCR 镜像 ghcr.io/<owner>/trimmedia-linux-arm:latest
+#
+# 触发方式：
+#   - Actions 页面手动 "Run workflow"
+#   - push 到 main 分支时自动触发
+# =============================================================================
+
+name: build-arm64-image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write   # 创建 Release 并上传附件
+  packages: write   # 推送 GHCR（可选步骤）
+
+jobs:
+  build:
+    # GitHub 原生 arm64 runner（公共仓库免费使用）
+    # 如果报 "runner not found"：改成 ubuntu-latest，并取消下面 QEMU 两步的注释
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---------------- QEMU 兜底（仅当使用 x86 的 ubuntu-latest 时启用）----------------
+      # - uses: docker/setup-qemu-action@v3
+      # - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        run: |
+          docker build -t trimmedia-linux-arm:local .
+          docker images trimmedia-linux-arm:local
+
+      - name: Export image as tar.gz
+        run: |
+          docker save trimmedia-linux-arm:local | gzip -6 > trimmedia-arm64.tar.gz
+          sha256sum trimmedia-arm64.tar.gz > trimmedia-arm64.tar.gz.sha256
+          ls -lh trimmedia-arm64.tar.gz
+          cat trimmedia-arm64.tar.gz.sha256
+
+      - name: Push to GHCR (optional, failure tolerated)
+        continue-on-error: true
+        run: |
+          IMG="ghcr.io/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')/trimmedia-linux-arm:latest"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag trimmedia-linux-arm:local "$IMG"
+          docker push "$IMG"
+          echo "已推送: $IMG"
+
+      - name: Create Release with image artifact
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: image-${{ github.run_number }}
+          name: "arm64 镜像构建 #${{ github.run_number }}"
+          files: |
+            trimmedia-arm64.tar.gz
+            trimmedia-arm64.tar.gz.sha256
+          body: |
+            ## arm64 Docker 镜像（斐讯 N1 等 arm64 设备）
+
+            在 N1 上下载并加载（ghproxy 加速；若前缀不通可去掉前缀直连或换其他镜像站）：
+
+            ```sh
+            # ① 下载（下载目录务必选剩余空间 ≥ 1GB 的位置，如 /mnt/mmcblk2p4）
+            wget "https://ghproxy.net/https://github.com/${{ github.repository }}/releases/download/image-${{ github.run_number }}/trimmedia-arm64.tar.gz"
+
+            # ② 校验（可选）
+            wget "https://ghproxy.net/https://github.com/${{ github.repository }}/releases/download/image-${{ github.run_number }}/trimmedia-arm64.tar.gz.sha256"
+            sha256sum -c trimmedia-arm64.tar.gz.sha256
+
+            # ③ 加载镜像（管道方式，省一半磁盘空间）
+            gzip -dc trimmedia-arm64.tar.gz | docker load
+
+            # ④ 无需 --build，直接启动（compose 会使用已加载的本地镜像）
+            cd <项目目录> && docker compose up -d
+            ```
